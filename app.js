@@ -1,120 +1,230 @@
-var http = require("http");
-var fs = require("fs");
-var url = require("url");
-var extension = require("./module/extension.js");
-var optimizer = require("./module/optimizer.js");
+(function() {
 
-//var EXPIRES = 60 * 60 * 24 * 365;
-var EXPIRES = 10;
-var CACHE_FLAG = ":cache";
+  var conf = require("./settings").conf;
+  if (!conf) {
+    console.log("No settings.js file");
+    return;
+  } else {
+    console.log("Shenglong v." + conf.version + "-" + conf.update);
+  }
 
-var getEtag = function(stats) {
-  return "'" + stats.size + '-' + Number(stats.mtime) + "'";
-}
+  var spdy = require("spdy");
+  var http = require("http");
+  var fs = require("fs");
+  var url = require("url");
+  var extension = require("./module/extension");
+  var optimizer = require("./module/optimizer");
 
-var getLastModified = function(stats) {
-  return stats.mtime.toUTCString();
-}
+  var pathname = conf.path || __dirname;
 
-
-http.createServer(function(req, res) {
-
-  var infoHeader = {
-    "Server": "Shenglong Optimization System",
-    "X-Powered-By": "NodeJS",
-    "X-XSS-Protection": "1; mode=block",
-    "X-Frame-Options": "SAMEORIGIN",
-    "Content-Type": "text/plain",
-    "Cache-Control": "public, max-age:" + EXPIRES,
-    "Expires": new Date(Date.now() + EXPIRES * 1000).toUTCString()
+  var option = {
+    key: fs.readFileSync(__dirname + conf.key),
+    cert: fs.readFileSync(__dirname + conf.cert),
+    ca: fs.readFileSync(__dirname + conf.ca)
   };
 
-  var pathname = __dirname;
-  var location = url.parse(req.url);
-  pathname += location.pathname;
-  pathname += (location.pathname.substr(location.pathname.length - 1, 1) == "/") ? "index.html" : "";
+  var getEtag = function(stats) {
+    return stats.size + '-' + Number(stats.mtime);
+  }
 
-  var flagUpdate = false;
+  var getLastModified = function(stats) {
+    return stats.mtime.toUTCString();
+  }
 
-  var publishCompressFile = function(pathname) {
-    res.writeHead(200, infoHeader);
-    var rs = fs.createReadStream(pathname);
-    var data = "";
-    rs.on("data", function(chunk) {
-      data += chunk;
-    }).on("end", function() {
-      optimizer.compressFile(data, pathname);
-      console.log("End pipe Event");
-    });
-    console.log("Prepare pipe");
-    rs.pipe(res);
-    console.log("End pipe");
-    return 1;
-  };
 
-  fs.stat(pathname, function(err, stats) {
+  var serverHttp = http.createServer(function(req, res) {
+    var infoHeader = {
+      "Server": "Shenglong Optimization System",
+      "X-Powered-By": "NodeJS",
+      "X-XSS-Protection": "1; mode=block",
+      "X-Frame-Options": "SAMEORIGIN",
+      "Content-Type": "text/plain",
+      "Cache-Control": "public, max-age:" + conf.expires,
+      "Expires": new Date(Date.now() + conf.expires * 1000).toUTCString()
+    };
 
-    if (err) {
-      res.writeHead(404, infoHeader);
-      res.end();
-      //console.log("Orignal File 404:" + pathname);
-      return;
-    }
+    var location = url.parse(req.url);
+    var targetPath = pathname + location.pathname;
+    targetPath += (location.pathname.substr(location.pathname.length - 1, 1) == "/") ? "/index.html" : "";
 
-    var extObject = extension.getContentTypeFromExt(pathname);
-    infoHeader["Content-Type"] = extObject.mimeType;
-    var etag = getEtag(stats);
-    infoHeader["ETag"] = etag;
-    var lastModified = getLastModified(stats);
-    infoHeader["Last-Modified"] = lastModified;
+    var flagUpdate = false;
 
-    if (req.headers["if-none-match"]) {
-      if (req.headers["if-none-match"] == etag + CACHE_FLAG) {
-        res.writeHead(304, infoHeader);
+    var publishCompressFile = function(pathname) {
+      res.writeHead(200, infoHeader);
+      var rs = fs.createReadStream(pathname);
+      var data = "";
+      rs.on("data", function(chunk) {
+        data += chunk;
+      }).on("end", function() {
+        optimizer.compressFile(data, pathname);
+      });
+      rs.pipe(res);
+      return 1;
+    };
+
+    fs.stat(targetPath, function(err, stats) {
+
+      if (err) {
+        res.writeHead(404, infoHeader);
         res.end();
-        //console.log("Cache File 304:" + pathname);
         return;
-      } else if(req.headers["if-none-match"].indexOf(CACHE_FLAG) > -1){
-        flagUpdate = true;
       }
-    }
 
-    switch (extObject.extention) {
-      case "html":
-      case "htm":
-      case "js":
-      case "css":
-      case "manifest":
-        var gzipPathname = pathname + ".gz";
-        fs.stat(gzipPathname, function(err, stats) {
+      var extObject = extension.getContentTypeFromExt(targetPath);
+      infoHeader["Content-Type"] = extObject.mimeType;
+      var etag = getEtag(stats);
+      infoHeader["ETag"] = etag;
+      var lastModified = getLastModified(stats);
+      infoHeader["Last-Modified"] = lastModified;
 
-          if (err || flagUpdate) {
-            publishCompressFile(pathname);
-            //console.log("No Gzip File 200:" + pathname);
-          } else {
-            infoHeader["Content-Encoding"] = "gzip";
-            infoHeader["ETag"] += CACHE_FLAG;
-            res.writeHead(200, infoHeader);
-            var rs = fs.createReadStream(gzipPathname);
-            rs.pipe(res);
-            //console.log("Gzip File 200:" + pathname);
-          }
+      if (req.headers["if-none-match"]) {
+        if (req.headers["if-none-match"] == etag + conf.cache_flag) {
+          infoHeader["Vary"] = "Accept-Encoding";
+          res.writeHead(304, infoHeader);
+          res.end();
+          return;
+        } else if (req.headers["if-none-match"].indexOf(conf.cache_flag) > -1) {
+          flagUpdate = true;
+        }
+      } else {
+        //console.log("No etag");
+        //console.log(req.headers["if-none-match"]);
+        //console.log(etag + settings.conf.cache_flag);        
+      }
 
-        });
-        break;
-      case "jpeg":
-      case "jpg":
-      case "gif":
-      case "png":
-      case "ico":
-      default:
-        infoHeader["ETag"] += CACHE_FLAG;
-        res.writeHead(200, infoHeader);
-        var rs = fs.createReadStream(pathname);
-        rs.pipe(res);
-    }
+      switch (extObject.extention) {
+        case "html":
+        case "htm":
+        case "js":
+        case "css":
+        case "manifest":
+          var gzipPathname = targetPath + ".gz";
+          fs.stat(gzipPathname, function(err, stats) {
 
+            if (err || flagUpdate) {
+              publishCompressFile(targetPath);
+            } else {
+              infoHeader["Content-Encoding"] = "gzip";
+              infoHeader["Vary"] = "Accept-Encoding";              
+              infoHeader["ETag"] += conf.cache_flag;
+              res.writeHead(200, infoHeader);
+              var rs = fs.createReadStream(gzipPathname);
+              rs.pipe(res);
+            }
 
-  });
+          });
+          break;
+        case "jpeg":
+        case "jpg":
+        case "gif":
+        case "png":
+        case "ico":
+        default:
+          infoHeader["ETag"] += conf.cache_flag;
+          res.writeHead(200, infoHeader);
+          var rs = fs.createReadStream(targetPath);
+          rs.pipe(res);
+      }
 
-}).listen(1111, "127.0.0.1");
+    });
+  }).listen(conf.port.http, conf.domain);
+
+  var serverHttps = spdy.createServer(option, function(req, res) {
+
+    var infoHeader = {
+      "Server": "Shenglong Optimization System",
+      "X-Powered-By": "NodeJS",
+      "X-XSS-Protection": "1; mode=block",
+      "X-Frame-Options": "SAMEORIGIN",
+      "Content-Type": "text/plain",
+      "Cache-Control": "public, max-age:" + conf.expires,
+      "Expires": new Date(Date.now() + conf.expires * 1000).toUTCString()
+    };
+
+    var location = url.parse(req.url);
+    var targetPath = pathname + location.pathname;
+    targetPath += (location.pathname.substr(location.pathname.length - 1, 1) == "/") ? "/index.html" : "";
+
+    var flagUpdate = false;
+
+    var publishCompressFile = function(pathname) {
+      res.writeHead(200, infoHeader);
+      var rs = fs.createReadStream(pathname);
+      var data = "";
+      rs.on("data", function(chunk) {
+        data += chunk;
+      }).on("end", function() {
+        optimizer.compressFile(data, pathname);
+      });
+      rs.pipe(res);
+      return 1;
+    };
+
+    fs.stat(targetPath, function(err, stats) {
+
+      if (err) {
+        res.writeHead(404, infoHeader);
+        res.end();
+        return;
+      }
+
+      var extObject = extension.getContentTypeFromExt(targetPath);
+      infoHeader["Content-Type"] = extObject.mimeType;
+      var etag = getEtag(stats);
+      infoHeader["ETag"] = etag;
+      var lastModified = getLastModified(stats);
+      infoHeader["Last-Modified"] = lastModified;
+
+      if (req.headers["if-none-match"]) {
+        if (req.headers["if-none-match"] == etag + conf.cache_flag) {
+          infoHeader["Vary"] = "Accept-Encoding";
+          res.writeHead(304, infoHeader);
+          res.end();
+          return;
+        } else if (req.headers["if-none-match"].indexOf(conf.cache_flag) > -1) {
+          flagUpdate = true;
+        }
+      } else {
+        //console.log("No etag");
+        //console.log(req.headers["if-none-match"]);
+        //console.log(etag + settings.conf.cache_flag);        
+      }
+
+      switch (extObject.extention) {
+        case "html":
+        case "htm":
+        case "js":
+        case "css":
+        case "manifest":
+          var gzipPathname = targetPath + ".gz";
+          fs.stat(gzipPathname, function(err, stats) {
+
+            if (err || flagUpdate) {
+              publishCompressFile(targetPath);
+            } else {
+              infoHeader["Content-Encoding"] = "gzip";
+              infoHeader["Vary"] = "Accept-Encoding";              
+              infoHeader["ETag"] += conf.cache_flag;
+              res.writeHead(200, infoHeader);
+              var rs = fs.createReadStream(gzipPathname);
+              rs.pipe(res);
+            }
+
+          });
+          break;
+        case "jpeg":
+        case "jpg":
+        case "gif":
+        case "png":
+        case "ico":
+        default:
+          infoHeader["ETag"] += conf.cache_flag;
+          res.writeHead(200, infoHeader);
+          var rs = fs.createReadStream(targetPath);
+          rs.pipe(res);
+      }
+
+    });
+  }).listen(conf.port.https, conf.domain);
+
+})();
