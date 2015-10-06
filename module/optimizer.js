@@ -3,19 +3,16 @@ module.exports = module.exports || {};
 console.log('optimizer module load!');
 
 var htmlminifier = require("html-minifier");
-var cheerio = require('cheerio');
-var fs = require("fs");
-var zlib = require("zlib");
-var util = require('util');
 var CleanCSS = require("clean-css");
 var UglifyJS = require("uglify-js");
+var cheerio = require("cheerio");
+var sass = require("node-sass");
+var zlib = require("zlib");
+var util = require("util");
+var fs = require("fs");
+
 
 var optimizer = function() {
-
-
-  //var SUCCESS = 1;
-  //var FALSE = 0;
-  //var ERROR = -1;
 
   var minifiedPreExtention = "min";
   var gzipedExtention = "gz";
@@ -54,7 +51,9 @@ var optimizer = function() {
       return 0;
     }
 
-    var ws = fs.createWriteStream(path);
+    var ws = fs.createWriteStream(path, {
+      encoding: "utf8"
+    });
     ws.on('error', function(e) {
       console.log('write: ' + e);
     });
@@ -85,7 +84,9 @@ var optimizer = function() {
         return 0;
       }
 
-      var inFile = fs.createReadStream(orgFile);
+      var inFile = fs.createReadStream(orgFile, {
+        encoding: "utf8"
+      });
       var outFile = fs.createWriteStream(orgFile + "." + gzipedExtention);
       var gzip = zlib.createGzip();
       inFile.pipe(gzip).pipe(outFile);
@@ -99,6 +100,7 @@ var optimizer = function() {
     adjustPosition: function(data) {
 
       var $ = cheerio.load(data);
+
       //$("html").attr("manifest", fileTitle + ".manifest");
       var $css = $("body [rel=stylesheet]");
       $css.each(function(i, elem) {
@@ -124,7 +126,7 @@ var optimizer = function() {
       $cache.each(function(i, elem) {
         if (elem.attribs.src) {
           dataManifest += elem.attribs.src + "\n";
-        }else if(elem.attribs.href){
+        } else if (elem.attribs.href) {
           dataManifest += elem.attribs.href + "\n";
         }
         $(elem).removeClass("CACHE");
@@ -135,7 +137,7 @@ var optimizer = function() {
       $cache.each(function(i, elem) {
         if (elem.attribs.src) {
           dataManifest += elem.attribs.src + "\n";
-        }else if(elem.attribs.href){
+        } else if (elem.attribs.href) {
           dataManifest += elem.attribs.href + "\n";
         }
         $(elem).removeClass("NETWORK");
@@ -146,7 +148,7 @@ var optimizer = function() {
       $cache.each(function(i, elem) {
         if (elem.attribs.src) {
           dataManifest += elem.attribs.src + "\n";
-        }else if(elem.attribs.href){
+        } else if (elem.attribs.href) {
           dataManifest += elem.attribs.href + "\n";
         }
         $(elem).removeClass("FALLBACK");
@@ -155,7 +157,11 @@ var optimizer = function() {
       //console.log(dataManifest);
       saveFile(dataManifest, pathname + ".manifest");
 
-      data = $.html();
+      data = $.html({
+        decodeEntities: false
+      });
+
+      console.log(data);
 
       return data;
     },
@@ -171,8 +177,8 @@ var optimizer = function() {
 
       //var minifiedFileName = pathname.replace(fileName, fileTitle + "." + minifiedPreExtention + "." + fileExtention);
       //saveFile(data, minifiedFileName);
-      var gzipedFileName = pathname + "." + gzipedExtention;
-      this.compressGzip(data, gzipedFileName);
+      //var gzipedFileName = pathname + "." + gzipedExtention;
+      //this.compressGzip(data, gzipedFileName);
 
     },
     compressHtml: function(data, path) {
@@ -218,11 +224,33 @@ var optimizer = function() {
       }
 
       data = new CleanCSS().minify(data).styles;
+
+      console.log(data);
+
       var minifiedFileName = pathname.replace(fileName, fileTitle + "." + minifiedPreExtention + "." + fileExtention);
       saveFile(data, minifiedFileName);
 
       var gzipedFileName = pathname + "." + gzipedExtention;
       this.compressGzip(data, gzipedFileName);
+
+      return 1;
+
+    },
+    compressScss: function(data, path) {
+
+      if (path) {
+        var ret = detectFileInfo(path);
+        if (ret != 1) {
+          console.log("detectFile status : " + ret);
+          return 0;
+        }
+      }
+
+      var result = sass.renderSync({
+        data: data,
+      });
+
+      this.compressCss(result.css.toString(), path);
 
       return 1;
 
@@ -239,7 +267,7 @@ var optimizer = function() {
 
       var result = UglifyJS.minify(pathname);
       data = result.code;
-      //console.log(data);
+
       var minifiedFileName = pathname.replace(fileName, fileTitle + "." + minifiedPreExtention + "." + fileExtention);
       saveFile(data, minifiedFileName);
 
@@ -261,17 +289,20 @@ var optimizer = function() {
 
       switch (fileExtention) {
         case "html":
-          this.compressHtml(data);
+          this.compressHtml(data, path);
           break;
         case "css":
-          this.compressCss(data);
+          this.compressCss(data, path);
+          break;
+        case "scss":
+          this.compressScss(data, path);
           break;
         case "js":
-          this.compressJs(data);
+          this.compressJs(data, path);
           break;
         case "svg":
         case "manifest":
-          this.compressFileToGzip(path);
+          this.compressFileToGzip(path, path);
         default:
       }
       return 1;

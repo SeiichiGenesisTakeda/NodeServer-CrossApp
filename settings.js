@@ -20,6 +20,7 @@
     expires : 60 * 60 * 24 * 365,
     //expires: 10,
     cache_flag: ":cache",
+    encoding: "utf8",
   };
 
 })(exports);

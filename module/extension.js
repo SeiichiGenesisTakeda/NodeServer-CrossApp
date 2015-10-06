@@ -128,6 +128,7 @@ var extention = function() {
     "rtf": "application/rtf",
     "ru": "text/x-script.ruby",
     "s": "text/x-asm",
+    "scss": "text/css",
     "sgm": "text/sgml",
     "sgml": "text/sgml",
     "sh": "application/x-sh",

@@ -51,7 +51,7 @@
 
     var publishCompressFile = function(pathname) {
       res.writeHead(200, infoHeader);
-      var rs = fs.createReadStream(pathname);
+      var rs = fs.createReadStream(pathname, conf);
       var data = "";
       rs.on("data", function(chunk) {
         data += chunk;
@@ -97,10 +97,12 @@
         case "htm":
         case "js":
         case "css":
+        case "scss":
         case "manifest":
+          infoHeader["Content-Type"] += "; charset=utf-8";
           var gzipPathname = targetPath + ".gz";
           fs.stat(gzipPathname, function(err, stats) {
-
+            req.setEncoding("utf8");
             if (err || flagUpdate) {
               publishCompressFile(targetPath);
             } else {
